@@ -1,0 +1,45 @@
+# Bloqueo de DNS over HTTPS (DoH)
+# Evita que los navegadores eviten nuestro control DNS
+# Las IPs se bloquean automáticamente en iptables
+
+# Cloudflare
+cloudflare-dns.com
+mozilla.cloudflare-dns.com
+odoh.cloudflare.com
+
+# Google
+dns.google
+dns.google.com
+
+# Quad9
+dns.quad9.net
+dns9.quad9.net
+
+# AdGuard
+dns.adguard-dns.com
+dns-unfiltered.adguard-dns.com
+family.adguard-dns.com
+
+# NextDNS
+dns.nextdns.io
+dns.nextdns.com
+
+# Otros DoH públicos
+doh.li
+doh.slashdotted.org
+doh.dnshome.de
+dns.twnic.tw
+rdns.faelix.net
+doh.ffmuc.net
+doh.cry.to
+doh.dnsprivacy.at
+doh.fdn.fr
+doh.knot-resolver.cz
+doh2.doh.sb
+dns.0xen.io
+dns.overpriv.io
+doh.tiarap.org
+
+# Apple
+mask.icloud-dns.com
+mask-h2.icloud-dns.com

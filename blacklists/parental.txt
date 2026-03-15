@@ -1,0 +1,88 @@
+# Ejemplo de lista negra - Modo Parental
+# Un dominio por línea
+# Lines starting with # are comments
+# Use *.<domain> for wildcards (blocks all subdomains)
+# Use !<domain> to whitelist (override blocking)
+
+# DoH - Evitar que evadan el control DNS
+# (Se añade automáticamente con --block-doh, pero los listamos aquí también)
+# cloudflare-dns.com
+# dns.google
+
+# Redes sociales
+facebook.com
+*.facebook.com
+instagram.com
+*.instagram.com
+twitter.com
+*.twitter.com
+x.com
+*.x.com
+tiktok.com
+*.tiktok.com
+snapchat.com
+*.snapchat.com
+reddit.com
+*.reddit.com
+whatsapp.com
+*.whatsapp.com
+telegram.org
+*.telegram.org
+discord.com
+*.discord.com
+
+# Streaming
+youtube.com
+*.youtube.com
+netflix.com
+*.netflix.com
+twitch.tv
+*.twitch.tv
+hulu.com
+*.hulu.com
+disneyplus.com
+*.disneyplus.com
+primevideo.com
+*.primevideo.com
+max.com
+*.max.com
+
+# Juegos online
+steampowered.com
+*.steampowered.com
+epicgames.com
+*.epicgames.com
+roblox.com
+*.roblox.com
+miniclip.com
+*.miniclip.com
+battle.net
+*.battle.net
+leagueoflegends.com
+*.leagueoflegends.com
+minecraft.net
+*.minecraft.net
+
+# Sitios de descargas
+torrentz2.eu
+*.torrentz2.eu
+thepiratebay.org
+*.thepiratebay.org
+1337x.to
+*.1337x.to
+rarbg.to
+*.rarbg.to
+kickassanime.ws
+*.kickassanime.ws
+
+# Adultos (ejemplo - revisar según necesidad)
+# Descomenta para activar
+# xhamster.com
+# *.xhamster.com
+# pornhub.com
+# *.pornhub.com
+
+# whitelist - permitir estos dominios aunque estén bloqueados por wildcard
+!youtube.com
+!facebook.com
+!wikipedia.org

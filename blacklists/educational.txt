@@ -1,0 +1,45 @@
+# Ejemplo de lista negra - Modo Educativo
+# Bloquea sitios distractores durante horario de estudio
+
+# Redes sociales
+facebook.com
+*.facebook.com
+instagram.com
+*.instagram.com
+twitter.com
+*.twitter.com
+x.com
+*.x.com
+tiktok.com
+*.tiktok.com
+snapchat.com
+*.snapchat.com
+
+# Streaming y entretenimiento
+youtube.com
+*.youtube.com
+netflix.com
+*.netflix.com
+twitch.tv
+*.twitch.tv
+hulu.com
+*.hulu.com
+
+# Juegos
+steampowered.com
+*.steampowered.com
+epicgames.com
+*.epicgames.com
+roblox.com
+*.roblox.com
+
+# Sitios de descargas
+torrentz2.eu
+*.torrentz2.eu
+thepiratebay.org
+*.thepiratebay.org
+1337x.to
+*.1337x.to
+
+# whitelist - permitir durante descansos
+!youtube.com
