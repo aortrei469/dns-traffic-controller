@@ -480,10 +480,14 @@ def clear_dns_cache():
     return False
 
 
-def flush_iptables_rules():
-    logger.warning("Flushing ALL iptables rules...")
+def flush_iptables_rules(preserve_nat=False):
+    logger.warning("Flushing iptables rules...")
 
-    tables = ["filter", "nat", "mangle", "raw", "security"]
+    if preserve_nat:
+        logger.info("Preserving NAT table (for router mode)")
+        tables = ["filter", "mangle", "raw", "security"]
+    else:
+        tables = ["filter", "nat", "mangle", "raw", "security"]
 
     for table in tables:
         try:
@@ -493,24 +497,48 @@ def flush_iptables_rules():
             subprocess.run(
                 ["iptables", "-t", table, "-X"], check=True, capture_output=True
             )
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Could not flush table {table}: {e}")
+        except subprocess.CalledProcessError:
+            pass
 
-    try:
-        subprocess.run(
-            ["iptables", "-P", "INPUT", "ACCEPT"], check=True, capture_output=True
-        )
-        subprocess.run(
-            ["iptables", "-P", "FORWARD", "ACCEPT"], check=True, capture_output=True
-        )
-        subprocess.run(
-            ["iptables", "-P", "OUTPUT", "DROP"], check=True, capture_output=True
-        )
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Could not set default policies: {e}")
-        return False
+    if not preserve_nat:
+        try:
+            subprocess.run(
+                ["iptables", "-P", "INPUT", "ACCEPT"], check=True, capture_output=True
+            )
+            subprocess.run(
+                ["iptables", "-P", "FORWARD", "ACCEPT"], check=True, capture_output=True
+            )
+            subprocess.run(
+                ["iptables", "-P", "OUTPUT", "DROP"], check=True, capture_output=True
+            )
+        except subprocess.CalledProcessError:
+            logger.error("Could not set default policies")
+            return False
+    else:
+        try:
+            subprocess.run(
+                ["iptables", "-P", "INPUT", "ACCEPT"], check=True, capture_output=True
+            )
+            subprocess.run(
+                ["iptables", "-P", "FORWARD", "ACCEPT"], check=True, capture_output=True
+            )
+            subprocess.run(
+                ["iptables", "-P", "OUTPUT", "DROP"], check=True, capture_output=True
+            )
+            subprocess.run(
+                ["iptables", "-t", "nat", "-P", "PREROUTING", "ACCEPT"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["iptables", "-t", "nat", "-P", "POSTROUTING", "ACCEPT"],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError:
+            pass
 
-    logger.info("Iptables rules flushed and default OUTPUT policy set to DROP")
+    logger.info("Iptables rules flushed")
     return True
 
 
@@ -748,12 +776,31 @@ def setup_iptables_base(controller, block_quic=True, block_vpn=True, block_doh=T
     logger.info("Base iptables rules configured")
 
 
+packet_queue = []
+queue_lock = threading.Lock()
+last_log_time = {}
+LOG_THROTTLE = 5
+
+
+def should_log(key):
+    """Rate limiting for logs"""
+    now = time.time()
+    with queue_lock:
+        if key in last_log_time:
+            if now - last_log_time[key] < LOG_THROTTLE:
+                return False
+        last_log_time[key] = now
+        return True
+
+
 def process_packet(controller, packet):
     if not packet.haslayer(IP):
         return
 
-    src_ip = packet[IP].src
-    dst_ip = packet[IP].dst
+    try:
+        dst_ip = packet[IP].dst
+    except:
+        return
 
     if controller.is_ip_allowed(dst_ip):
         return
@@ -762,56 +809,164 @@ def process_packet(controller, packet):
         is_new_blocked = dst_ip not in controller.blocked_ips
         controller.blocked_ips.add(dst_ip)
 
-    if is_new_blocked:
+    if is_new_blocked and should_log("blocked"):
         logger.info(f"[BLOCKED] {dst_ip}")
 
     if packet.haslayer(DNSQR):
-        dns_qry = packet[DNSQR]
-        query_name = dns_qry.qname.decode("utf-8").rstrip(".")
-        logger.info(f"[DNS QUERY] {query_name}")
+        try:
+            dns_qry = packet[DNSQR]
+            query_name = dns_qry.qname.decode("utf-8").rstrip(".")
+            if should_log(f"query_{query_name}"):
+                logger.debug(f"[DNS QUERY] {query_name}")
 
-        resolved_ip = controller.resolve_and_allow(query_name)
-        if resolved_ip:
-            logger.info(f"[RESOLVED] {query_name} -> {resolved_ip}")
+            resolved_ip = controller.resolve_and_allow(query_name)
+            if resolved_ip and should_log(f"resolved_{query_name}"):
+                logger.info(f"[RESOLVED] {query_name} -> {resolved_ip}")
+        except:
+            pass
 
     if packet.haslayer(DNSRR):
-        dns_resp = packet[DNSRR]
-        if dns_resp.rdata:
-            resolved_ip = (
-                dns_resp.rdata.decode("utf-8")
-                if isinstance(dns_resp.rdata, bytes)
-                else str(dns_resp.rdata)
-            )
-            controller.add_allowed_ip(resolved_ip)
-            logger.info(f"[DNS CACHE] {resolved_ip}")
+        try:
+            dns_resp = packet[DNSRR]
+            if dns_resp.rdata:
+                resolved_ip = (
+                    dns_resp.rdata.decode("utf-8")
+                    if isinstance(dns_resp.rdata, bytes)
+                    else str(dns_resp.rdata)
+                )
+                controller.add_allowed_ip(resolved_ip)
+                if should_log(f"cache_{resolved_ip}"):
+                    logger.debug(f"[DNS CACHE] {resolved_ip}")
+        except:
+            pass
 
 
-def packet_sniffer(controller, interface=None):
-    logger.info(f"Starting packet sniffer on interface: {interface or 'all'}")
+def verify_and_setup_nat(wan_interface=None):
+    """Verify NAT is configured, set it up if missing"""
+    logger.info("Verifying NAT configuration...")
 
-    filter_str = "outbound"
+    if wan_interface is None:
+        wan_interface = get_default_gateway_interface()
 
-    try:
-        sniff(
-            filter="outbound",
-            prn=lambda p: process_packet(controller, p),
-            store=0,
-            iface=interface,
-            stop_filter=lambda p: not controller.running,
-        )
-    except Exception as e:
-        logger.error(f"Sniffer error: {e}")
-        logger.info("Trying alternative capture method...")
+    if wan_interface is None:
+        logger.error("Cannot detect WAN interface for NAT")
+        return False
 
+    result = subprocess.run(
+        ["iptables", "-t", "nat", "-L", "POSTROUTING", "-n"],
+        capture_output=True,
+        text=True,
+    )
+
+    has_masquerade = wan_interface in result.stdout or "+" in result.stdout
+
+    if has_masquerade:
+        logger.info(f"NAT already configured for {wan_interface}")
+        return True
+
+    logger.info(f"Configuring NAT (MASQUERADE) on {wan_interface}...")
+
+    subprocess.run(
+        [
+            "iptables",
+            "-t",
+            "nat",
+            "-A",
+            "POSTROUTING",
+            "-o",
+            wan_interface,
+            "-j",
+            "MASQUERADE",
+        ],
+        capture_output=True,
+    )
+
+    subprocess.run(
+        [
+            "iptables",
+            "-A",
+            "FORWARD",
+            "-i",
+            "eth1",
+            "-o",
+            wan_interface,
+            "-m",
+            "state",
+            "--state",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "ACCEPT",
+        ],
+        capture_output=True,
+    )
+
+    subprocess.run(
+        [
+            "iptables",
+            "-A",
+            "FORWARD",
+            "-i",
+            "eth1",
+            "-o",
+            wan_interface,
+            "-j",
+            "ACCEPT",
+        ],
+        capture_output=True,
+    )
+
+    logger.info("NAT configured successfully")
+    return True
+
+
+def packet_sniffer(controller, interface=None, router_mode=False):
+    logger.info(
+        f"Starting packet sniffer on interface: {interface or 'all'} (router_mode={router_mode})"
+    )
+
+    if router_mode:
+        logger.info("Router mode: capturing FORWARD traffic only")
         try:
             sniff(
+                filter="forward",
                 prn=lambda p: process_packet(controller, p),
                 store=0,
                 iface=interface,
-                filter="tcp or udp",
+                stop_filter=lambda p: not controller.running,
             )
-        except Exception as e2:
-            logger.error(f"Alternative sniffer also failed: {e2}")
+        except Exception as e:
+            logger.debug(f"Forward filter not supported, using all: {e}")
+            try:
+                sniff(
+                    filter="ip",
+                    prn=lambda p: process_packet(controller, p),
+                    store=0,
+                    iface=interface,
+                    stop_filter=lambda p: not controller.running,
+                )
+            except Exception as e2:
+                logger.error(f"Sniffer failed: {e2}")
+    else:
+        try:
+            sniff(
+                filter="outbound",
+                prn=lambda p: process_packet(controller, p),
+                store=0,
+                iface=interface,
+                stop_filter=lambda p: not controller.running,
+            )
+        except Exception as e:
+            logger.debug(f"Outbound filter not supported: {e}")
+            try:
+                sniff(
+                    filter="tcp or udp",
+                    prn=lambda p: process_packet(controller, p),
+                    store=0,
+                    iface=interface,
+                    stop_filter=lambda p: not controller.running,
+                )
+            except Exception as e2:
+                logger.error(f"Alternative sniffer also failed: {e2}")
 
 
 def get_user_confirmation():
@@ -887,6 +1042,13 @@ def parse_args():
         help="Enable router mode (forward traffic, act as gateway)",
     )
     parser.add_argument(
+        "-i",
+        "--interface",
+        dest="capture_interface",
+        metavar="IFACE",
+        help="Network interface to capture traffic on (in router mode, typically the LAN interface)",
+    )
+    parser.add_argument(
         "--load-ips",
         metavar="FILE",
         nargs="?",
@@ -954,9 +1116,34 @@ def force_local_dns(dns_servers):
         pass
 
 
+def get_default_gateway_interface():
+    """Detect the default gateway interface (WAN)"""
+    try:
+        result = subprocess.run(
+            ["ip", "route", "show", "default"], capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                parts = line.split()
+                if parts and parts[0] == "default":
+                    for i, part in enumerate(parts):
+                        if part == "dev" and i + 1 < len(parts):
+                            return parts[i + 1]
+    except:
+        pass
+    return None
+
+
 def setup_router_mode():
     """Enable IP forwarding and routing"""
     logger.info("Enabling router mode...")
+
+    wan_interface = get_default_gateway_interface()
+    if wan_interface:
+        logger.info(f"Detected WAN interface: {wan_interface}")
+    else:
+        logger.warning("Could not detect WAN interface, using 'auto'")
+        wan_interface = "+"
 
     with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
         f.write("1")
@@ -970,6 +1157,7 @@ def setup_router_mode():
     except:
         pass
 
+    logger.info("Setting up FORWARD rules...")
     subprocess.run(
         [
             "iptables",
@@ -987,8 +1175,25 @@ def setup_router_mode():
     subprocess.run(
         ["iptables", "-A", "FORWARD", "-i", "lo", "-j", "ACCEPT"], capture_output=True
     )
+    subprocess.run(["iptables", "-A", "FORWARD", "-j", "LOG"], capture_output=True)
 
-    logger.info("Router mode enabled")
+    logger.info("Setting up NAT (masquerade)...")
+    subprocess.run(
+        [
+            "iptables",
+            "-t",
+            "nat",
+            "-A",
+            "POSTROUTING",
+            "-o",
+            wan_interface,
+            "-j",
+            "MASQUERADE",
+        ],
+        capture_output=True,
+    )
+
+    logger.info("Router mode enabled successfully")
 
 
 def main():
@@ -1018,16 +1223,20 @@ def main():
     if args.force_dns:
         force_local_dns(DNS_SERVERS)
 
-    if args.router:
-        setup_router_mode()
-
     blacklist_manager = BlacklistManager()
     for bl_file in blacklist_files:
         blacklist_manager.load_from_file(bl_file)
 
     clear_dns_cache()
 
-    flush_iptables_rules()
+    flush_iptables_rules(preserve_nat=args.router)
+
+    if args.router:
+        logger.info("Configuring router mode...")
+        capture_iface = args.capture_interface or "eth1"
+        logger.info(f"Capturing on interface: {capture_iface}")
+        setup_router_mode()
+        verify_and_setup_nat()
 
     controller = DNSTrafficController(
         dns_servers=DNS_SERVERS, blacklist=blacklist_manager
@@ -1038,6 +1247,8 @@ def main():
         loaded = controller.load_ips(load_file)
         if loaded > 0:
             logger.info(f"Loaded {loaded} IPs from previous session")
+        elif loaded == 0:
+            logger.info("No saved IPs found, will learn new ones")
 
     setup_iptables_base(
         controller,
@@ -1048,8 +1259,11 @@ def main():
 
     controller.running = True
 
+    capture_iface = args.capture_interface if args.router else None
     sniffer_thread = threading.Thread(
-        target=packet_sniffer, args=(controller,), daemon=True
+        target=packet_sniffer,
+        args=(controller, capture_iface, args.router),
+        daemon=True,
     )
     sniffer_thread.start()
 
@@ -1059,6 +1273,9 @@ def main():
     print(f"\nDNS servers: {', '.join(DNS_SERVERS)}")
     print("Allowed private networks: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16")
     print(f"Verbose mode: {'ON' if args.verbose else 'OFF'}")
+    print(f"Router mode: {'ON' if args.router else 'OFF'}")
+    if args.router:
+        print(f"Capture interface: {capture_iface or 'auto'}")
     print("\nPress Ctrl+C to stop...")
     print("=" * 60 + "\n")
 
