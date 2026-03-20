@@ -2,207 +2,177 @@
 
 **Control parental y de red avanzado con protección contra evasión**
 
-Sistema de filtrado de tráfico de red que restrict el acceso a internet:
+Sistema de filtrado de tráfico de red que restringe el acceso a internet permitiendo solo:
 - Direcciones IP privadas locales
 - IPs resueltas vía DNS controlado
 - Listas negras personalizables
-- Bloqueo completo de DoH, DoT, QUIC, VPNs, proxies y túneles
+- Bloqueo completo de DoH, DoT, QUIC, VPNs y túneles
 
----
+## Características
 
-## Tabla de Contenidos
+- 🎯 **Sniffing DNS** - Detecta y resuelve consultas automáticamente
+- 🔒 **Bloqueo por defecto** - Política OUTPUT DROP
+- 📝 **Listas negras** - Modo parental, educativo, custom
+- 🛡️ **Protección contra evasión** - Bloquea DoH, DoT, QUIC, VPNs, proxies, túneles
+- ⏰ **Forzar DNS local** - Modifica configuración del sistema
+- 🌐 **Modo Router** - Funciona como gateway
+- 📊 **Logs persistentes** - Guardados en `/var/log/dns-controller/`
+- 💾 **Persistencia de IPs** - Guarda y carga IPs aprendidas entre sesiones
 
-1. [Instalación](#instalación)
-2. [Modo PC Individual](#modo-pc-individual)
-3. [Modo Router](#modo-router)
-4. [Opciones de Línea de Comandos](#opciones-de-línea-de-comandos)
-5. [Bloqueos Automáticos](#bloqueos-automáticos)
-6. [Listas Negras](#listas-negras)
-7. [Logs y Persistencia](#logs-y-persistencia)
-8. [Comandos de Emergencia](#comandos-de-emergencia)
-9. [Solución de Problemas](#solución-de-problemas)
+## Casos de Uso
+
+### 1. PC Individual (Control Parental)
+```
+[PC Niño] → [DNS Controller] → [Router] → [Internet]
+```
+Para controlar el ordenador de un niño.
+
+### 2. Router de Aula
+```
+[PCs Aula] → [PC Router] → [Mikrotik] → [ISP]
+```
+Para controlar toda una red de aula.
 
 ---
 
 ## Instalación
 
-### Opción A: Instalador interactivo (recomendado)
+### Opción A: Usar el instalador interactivo (recomendado)
 
 ```bash
 cd /home/admon/opencodeDNS
 sudo ./install.sh
 ```
 
+El instalador te permitirá:
+- Elegir perfil (parental/educativo)
+- Seleccionar servidor DNS
+- Configurar opciones
+- Instalar como servicio
+
 ### Opción B: Instalación manual
 
 ```bash
+# Instalar dependencias
 sudo apt update
 sudo apt install python3-pip iptables
 sudo pip3 install scapy
 
+# Copiar script
 sudo cp dns_traffic_controller.py /usr/local/bin/
 sudo chmod +x /usr/local/bin/dns_traffic_controller.py
 ```
 
 ---
 
-## Modo PC Individual
+## Guía de Prueba - Ejemplos por Orden
 
-Para controlar un solo equipo (ej: ordenador de un niño).
-
-```
-[PC Niño] → [DNS Controller] → [Router] → [Internet]
-```
-
-### Comandos de uso
+### 1. Prueba básica (sin blacklist)
 
 ```bash
-# 1. Prueba básica (sin blacklist)
 sudo python3 dns_traffic_controller.py -v -y
+```
 
-# 2. Modo Parental
+Esto ejecuta el controlador con:
+- ✅ Bloqueo de DoH/DoT/QUIC
+- ✅ Bloqueo de VPNs y proxies
+- ✅ Solo permite DNS (puerto 53)
+- ⏭️ **Siguiente paso: ejecutar con blacklist**
+
+---
+
+### 2. Modo Parental (con lista negra)
+
+```bash
 sudo python3 dns_traffic_controller.py -v -y --blacklist blacklists/parental.txt
+```
 
-# 3. Con forzar DNS local
+Esto añade:
+- ❌ Bloquea redes sociales (Facebook, Instagram, Twitter, TikTok, etc.)
+- ❌ Bloquea streaming (YouTube, Netflix, Twitch)
+- ❌ Bloquea juegos (Steam, Epic, Roblox)
+
+---
+
+### 3. Con forzar DNS local
+
+```bash
 sudo python3 dns_traffic_controller.py -v -y --blacklist blacklists/parental.txt --force-dns
+```
 
-# 4. Guardar IPs aprendidas (al salir)
+Esto fuerza al sistema a usar el DNS configurado.
+
+---
+
+### 4. Guardar IPs aprendidas (al salir)
+
+```bash
 sudo python3 dns_traffic_controller.py -v -y --blacklist blacklists/parental.txt --save-ips
+```
 
-# 5. Cargar IPs guardadas (al iniciar)
+Al salir (Ctrl+C), guardará las IPs aprendidas en:
+- `/etc/dns-controller/allowed_ips.txt`
+- `/etc/dns-controller/allowed_ips.txt.domains`
+
+---
+
+### 5. Cargar IPs guardadas (al iniciar)
+
+```bash
 sudo python3 dns_traffic_controller.py -v -y --blacklist blacklists/parental.txt --load-ips
+```
 
-# 6. Sesión completa (cargar + guardar)
+Carga las IPs de la sesión anterior para no tener que volver a resolverlas.
+
+---
+
+### 6. Sesión completa (cargar + guardar)
+
+```bash
 sudo python3 dns_traffic_controller.py -v -y --blacklist blacklists/parental.txt --load-ips --save-ips
 ```
 
 ---
 
-## Modo Router
-
-Para controlar toda una red de aula o laboratorio.
-
-```
-[ISP] → [Mikrotik] → [PC Router Ubuntu] → [Red de alumnos]
-```
-
-### Características del modo router
-
-- **NAT automático**: Verifica y configura MASQUERADE si falta
-- **Captura FORWARD**: Solo tráfico de clientes, no del router
-- **Rate limiting**: Logs optimizados para alto tráfico
-- **Persistencia**: Carga IPs conocidas, guarda aprendidas
-
-### 1. Configurar interfaces de red
-
-Edita `/etc/netplan/01-netcfg.yaml`:
-
-```yaml
-network:
-  version: 2
-  renderer: networkd
-  ethernets:
-    eth0:  # WAN (hacia Mikrotik/ISP)
-      dhcp4: yes
-    eth1:  # LAN (hacia red de alumnos)
-      addresses:
-        - 192.168.100.1/24
-      dhcp4: no
-```
-
-Aplicar:
-```bash
-sudo netplan apply
-```
-
-### 2. Habilitar IP Forwarding
+### 7. Modo Educativo
 
 ```bash
-echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
+sudo python3 dns_traffic_controller.py -v -y --blacklist blacklists/educational.txt
 ```
 
-### 3. Limpiar reglas existentes
+---
+
+### 8. Solo bloqueo DoH/QUIC/VPN (sin blacklist)
 
 ```bash
-sudo iptables -F
-sudo iptables -X
-sudo iptables -t nat -F
-sudo iptables -P INPUT ACCEPT
-sudo iptables -P FORWARD ACCEPT
-sudo iptables -P OUTPUT ACCEPT
+sudo python3 dns_traffic_controller.py -v -y
 ```
 
-### 4. Ejecutar
+Ya incluye el bloqueo por defecto.
 
-#### Ver interfaces disponibles
+---
+
+### 9. Modo Router (para aula)
+
 ```bash
-ip link show
-# o
-ip addr
+sudo python3 dns_traffic_controller.py -v -y --blacklist blacklists/educational.txt --router
 ```
 
-#### Especificar interfaz de captura
+Esto habilita:
+- IP forwarding
+- Forward de tráfico
+- Permite actuar como gateway
 
-Cuando el router tiene múltiples interfaces, especifica la LAN (donde están los clientes):
+---
 
-```bash
-cd /home/admon/opencodeDNS
-sudo python3 dns_traffic_controller.py -v -y \
-    --router \
-    -i eth1 \
-    --blacklist blacklists/educational.txt \
-    --load-ips \
-    --save-ips
-```
-
-| Opción | Descripción |
-|--------|-------------|
-| `-i eth1` | Interfaz LAN donde están los clientes (default: eth1) |
-
-#### Auto-detección
-```bash
-# Sin especificar (usa eth1 por defecto)
-sudo python3 dns_traffic_controller.py -v -y \
-    --router \
-    --blacklist blacklists/educational.txt \
-    --load-ips --save-ips
-```
-
-### 5. Verificar funcionamiento
+### 10. Ver logs
 
 ```bash
-# Ver NAT configurado
-sudo iptables -t nat -L POSTROUTING -n -v
-
-# Ver reglas FORWARD
-sudo iptables -L FORWARD -n -v
-
 # Ver logs en tiempo real
 sudo tail -f /var/log/dns-controller/dns-controller.log
-```
 
-### 6. (Opcional) Configurar DHCP con dnsmasq
-
-```bash
-sudo apt install dnsmasq
-
-sudo nano /etc/dnsmasq.d/dns-controller.conf
-```
-
-Contenido:
-```conf
-interface=eth1
-dhcp-range=192.168.100.10,192.168.100.250,24h
-dhcp-option=3,192.168.100.1
-dhcp-option=6,192.168.100.1
-server=208.67.222.222
-server=208.67.220.220
-```
-
-```bash
-sudo systemctl enable dnsmasq
-sudo systemctl restart dnsmasq
+# Ver últimos 50 líneas
+sudo tail -50 /var/log/dns-controller/dns-controller.log
 ```
 
 ---
@@ -220,7 +190,6 @@ sudo systemctl restart dnsmasq
 | `--no-doh` | No bloquear DoH |
 | `--force-dns` | Forzar DNS local |
 | `--router` | Modo router/gateway |
-| `-i, --interface IFACE` | Interfaz de captura (LAN, default: eth1) |
 | `--load-ips [FILE]` | Cargar IPs guardadas |
 | `--save-ips [FILE]` | Guardar IPs al salir |
 | `--no-log-file` | No guardar logs a archivo |
@@ -277,45 +246,9 @@ dominio.com              # Bloquea dominio y subdominios
 ```
 
 ### Listas incluidas
-
-| Archivo | Uso |
-|---------|-----|
-| `blacklists/parental.txt` | Control parental |
-| `blacklists/educational.txt` | Aula de informática |
-| `blacklists/doh-block.txt` | Solo bloqueo DoH |
-
-### Múltiples listas
-```bash
-sudo python3 dns_traffic_controller.py -v -y \
-    --blacklist blacklists/parental.txt \
-    blacklists/educational.txt \
-    blacklists/doh-block.txt
-```
-
----
-
-## Logs y Persistencia
-
-### Ubicaciones
-
-| Tipo | Ruta |
-|------|------|
-| Logs | `/var/log/dns-controller/dns-controller.log` |
-| IPs guardadas | `/etc/dns-controller/allowed_ips.txt` |
-| DNS cache | `/etc/dns-controller/allowed_ips.txt.domains` |
-
-### Ver logs
-
-```bash
-# Tiempo real
-sudo tail -f /var/log/dns-controller/dns-controller.log
-
-# Últimas 100 líneas
-sudo tail -100 /var/log/dns-controller/dns-controller.log
-
-# Buscar bloqueos
-grep BLOCKED /var/log/dns-controller/dns-controller.log
-```
+- `blacklists/parental.txt` - Modo parental
+- `blacklists/educational.txt` - Modo educativo
+- `blacklists/doh-block.txt` - Solo DoH
 
 ---
 
@@ -325,116 +258,56 @@ grep BLOCKED /var/log/dns-controller/dns-controller.log
 # Liberar todo el tráfico
 sudo iptables -P OUTPUT ACCEPT
 sudo iptables -F
-sudo iptables -X
-sudo iptables -t nat -F
 
 # Script de emergencia
 sudo bash reset_iptables.sh
 
 # Ver reglas actuales
 sudo iptables -L OUTPUT -n -v
-sudo iptables -L FORWARD -n -v
 ```
 
 ---
 
-## Instalación como Servicio (Systemd)
+## Archivos
 
-```bash
-sudo nano /etc/systemd/system/dns-traffic-controller.service
 ```
-
-Contenido:
-```ini
-[Unit]
-Description=DNS Traffic Controller
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/usr/local/bin
-ExecStart=/usr/local/bin/dns_traffic_controller.py -v -y --blacklist /usr/local/bin/blacklists/educational.txt --router --load-ips --save-ips
-Restart=on-failure
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable dns-traffic-controller
-sudo systemctl start dns-traffic-controller
-sudo systemctl status dns-traffic-controller
+dns_traffic_controller.py   # Script principal
+install.sh                 # Instalador interactivo
+blacklists/
+├── parental.txt           # Lista parental
+├── educational.txt        # Lista educativa
+└── doh-block.txt         # Bloqueo DoH
 ```
 
 ---
 
-## Solución de Problemas
+## Ubicaciones
 
-### El router no forwardea tráfico
-```bash
-# Verificar IP forwarding
-cat /proc/sys/net/ipv4/ip_forward
-
-# Verificar NAT
-sudo iptables -t nat -L POSTROUTING -n -v
-
-# Verificar FORWARD
-sudo iptables -L FORWARD -n -v
-```
-
-### DNS no resuelve en clientes
-```bash
-# Ver que el script está corriendo
-ps aux | grep dns_traffic_controller
-
-# Probar DNS manualmente
-nslookup google.com 192.168.100.1
-
-# Ver logs
-sudo tail -f /var/log/dns-controller/dns-controller.log
-```
-
-### Máquinas virtuales escapan al control
-- VMs en modo bridge pueden evadir
-- Considerar bloquear en el switch/router upstream
+| Tipo | Ruta |
+|------|------|
+| Logs | `/var/log/dns-controller/dns-controller.log` |
+| IPs guardadas | `/etc/dns-controller/allowed_ips.txt` |
+| DNS cache | `/etc/dns-controller/allowed_ips.txt.domains` |
+| Script | `/usr/local/bin/dns_traffic_controller.py` |
 
 ---
 
 ## Limitaciones
 
 ### Lo que NO puede hacer (sin proxy MITM):
-- Filtrado por SNI
-- Inspección de contenido HTTPS
-- Bloqueo completo de CDNs compartidos
+- ❌ Filtrado por SNI
+- ❌ Inspección de contenido HTTPS
+- ❌ Bloqueo completo de CDNs compartidos
 
 ### Lo que SÍ bloquea:
-- DNS tradicional (UDP 53)
-- DNS sobre HTTPS (DoH)
-- DNS sobre TLS (DoT)
-- QUIC/HTTP3
-- VPNs
-- Proxies
-- Túneles
-- Dominios específicos
-
----
-
-## Archivos Incluidos
-
-```
-dns_traffic_controller.py   # Script principal
-install.sh                 # Instalador interactivo
-reset_iptables.sh          # Script de emergencia
-blacklists/
-├── parental.txt           # Lista parental
-├── educational.txt        # Lista educativa
-└── doh-block.txt         # Solo DoH
-```
+- ✅ DNS tradicional (UDP 53)
+- ✅ DNS sobre HTTPS (DoH)
+- ✅ DNS sobre TLS (DoT)
+- ✅ QUIC/HTTP3
+- ✅ VPNs
+- ✅ Proxies
+- ✅ Túneles
+- ✅ Dominios específicos
 
 ---
 
