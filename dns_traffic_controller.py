@@ -949,24 +949,24 @@ def packet_sniffer(controller, interface=None, router_mode=False):
     else:
         try:
             sniff(
-                filter="udp port 53",
+                filter="outbound",
                 prn=lambda p: process_packet(controller, p),
                 store=0,
                 iface=interface,
                 stop_filter=lambda p: not controller.running,
             )
         except Exception as e:
-            logger.debug(f"DNS filter failed: {e}")
+            logger.debug(f"Outbound filter not supported: {e}")
             try:
                 sniff(
-                    filter="udp or tcp",
+                    filter="tcp or udp",
                     prn=lambda p: process_packet(controller, p),
                     store=0,
                     iface=interface,
                     stop_filter=lambda p: not controller.running,
                 )
             except Exception as e2:
-                logger.error(f"Sniffer failed: {e2}")
+                logger.error(f"Alternative sniffer also failed: {e2}")
 
 
 def get_user_confirmation():
