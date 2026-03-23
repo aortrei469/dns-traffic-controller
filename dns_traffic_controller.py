@@ -1223,6 +1223,9 @@ def main():
     if args.force_dns:
         force_local_dns(DNS_SERVERS)
 
+    if args.router:
+        setup_router_mode()
+
     blacklist_manager = BlacklistManager()
     for bl_file in blacklist_files:
         blacklist_manager.load_from_file(bl_file)
