@@ -219,14 +219,6 @@ configure_options() {
         FORCE_DNS=""
     fi
     
-    echo -n "  ¿Modo router/gateway? (s/N): "
-    read -r router_mode
-    if [[ "$router_mode" =~ ^[Ss]$ ]]; then
-        ROUTER_MODE="--router"
-    else
-        ROUTER_MODE=""
-    fi
-    
     echo -n "  ¿Iniciar automáticamente al arranque? (S/n): "
     read -r autostart
     if [[ "$autostart" =~ ^[Nn]$ ]]; then

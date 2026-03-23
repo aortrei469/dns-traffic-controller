@@ -480,14 +480,10 @@ def clear_dns_cache():
     return False
 
 
-def flush_iptables_rules(preserve_nat=False):
+def flush_iptables_rules():
     logger.warning("Flushing iptables rules...")
 
-    if preserve_nat:
-        logger.info("Preserving NAT table (for router mode)")
-        tables = ["filter", "mangle", "raw", "security"]
-    else:
-        tables = ["filter", "nat", "mangle", "raw", "security"]
+    tables = ["filter", "nat", "mangle", "raw", "security"]
 
     for table in tables:
         try:
@@ -500,43 +496,19 @@ def flush_iptables_rules(preserve_nat=False):
         except subprocess.CalledProcessError:
             pass
 
-    if not preserve_nat:
-        try:
-            subprocess.run(
-                ["iptables", "-P", "INPUT", "ACCEPT"], check=True, capture_output=True
-            )
-            subprocess.run(
-                ["iptables", "-P", "FORWARD", "ACCEPT"], check=True, capture_output=True
-            )
-            subprocess.run(
-                ["iptables", "-P", "OUTPUT", "DROP"], check=True, capture_output=True
-            )
-        except subprocess.CalledProcessError:
-            logger.error("Could not set default policies")
-            return False
-    else:
-        try:
-            subprocess.run(
-                ["iptables", "-P", "INPUT", "ACCEPT"], check=True, capture_output=True
-            )
-            subprocess.run(
-                ["iptables", "-P", "FORWARD", "ACCEPT"], check=True, capture_output=True
-            )
-            subprocess.run(
-                ["iptables", "-P", "OUTPUT", "DROP"], check=True, capture_output=True
-            )
-            subprocess.run(
-                ["iptables", "-t", "nat", "-P", "PREROUTING", "ACCEPT"],
-                check=True,
-                capture_output=True,
-            )
-            subprocess.run(
-                ["iptables", "-t", "nat", "-P", "POSTROUTING", "ACCEPT"],
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError:
-            pass
+    try:
+        subprocess.run(
+            ["iptables", "-P", "INPUT", "ACCEPT"], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["iptables", "-P", "FORWARD", "ACCEPT"], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["iptables", "-P", "OUTPUT", "DROP"], check=True, capture_output=True
+        )
+    except subprocess.CalledProcessError:
+        logger.error("Could not set default policies")
+        return False
 
     logger.info("Iptables rules flushed")
     return True
@@ -919,54 +891,26 @@ def verify_and_setup_nat(wan_interface=None):
     return True
 
 
-def packet_sniffer(controller, interface=None, router_mode=False):
-    logger.info(
-        f"Starting packet sniffer on interface: {interface or 'all'} (router_mode={router_mode})"
-    )
-
-    if router_mode:
-        logger.info("Router mode: capturing DNS traffic")
+def packet_sniffer(controller):
+    logger.info("Starting packet sniffer")
+    try:
+        sniff(
+            filter="udp port 53",
+            prn=lambda p: process_packet(controller, p),
+            store=0,
+            stop_filter=lambda p: not controller.running,
+        )
+    except Exception as e:
+        logger.debug(f"DNS filter failed: {e}")
         try:
             sniff(
-                filter="udp port 53",
+                filter="udp or tcp",
                 prn=lambda p: process_packet(controller, p),
                 store=0,
-                iface=interface,
                 stop_filter=lambda p: not controller.running,
             )
-        except Exception as e:
-            logger.debug(f"DNS filter failed, trying broader: {e}")
-            try:
-                sniff(
-                    filter="udp or tcp",
-                    prn=lambda p: process_packet(controller, p),
-                    store=0,
-                    iface=interface,
-                    stop_filter=lambda p: not controller.running,
-                )
-            except Exception as e2:
-                logger.error(f"Sniffer failed: {e2}")
-    else:
-        try:
-            sniff(
-                filter="outbound",
-                prn=lambda p: process_packet(controller, p),
-                store=0,
-                iface=interface,
-                stop_filter=lambda p: not controller.running,
-            )
-        except Exception as e:
-            logger.debug(f"Outbound filter not supported: {e}")
-            try:
-                sniff(
-                    filter="tcp or udp",
-                    prn=lambda p: process_packet(controller, p),
-                    store=0,
-                    iface=interface,
-                    stop_filter=lambda p: not controller.running,
-                )
-            except Exception as e2:
-                logger.error(f"Alternative sniffer also failed: {e2}")
+        except Exception as e2:
+            logger.error(f"Sniffer failed: {e2}")
 
 
 def get_user_confirmation():
@@ -1037,18 +981,6 @@ def parse_args():
         help="Force local DNS by modifying /etc/resolv.conf",
     )
     parser.add_argument(
-        "--router",
-        action="store_true",
-        help="Enable router mode (forward traffic, act as gateway)",
-    )
-    parser.add_argument(
-        "-i",
-        "--interface",
-        dest="capture_interface",
-        metavar="IFACE",
-        help="Network interface to capture traffic on (in router mode, typically the LAN interface)",
-    )
-    parser.add_argument(
         "--load-ips",
         metavar="FILE",
         nargs="?",
@@ -1116,86 +1048,6 @@ def force_local_dns(dns_servers):
         pass
 
 
-def get_default_gateway_interface():
-    """Detect the default gateway interface (WAN)"""
-    try:
-        result = subprocess.run(
-            ["ip", "route", "show", "default"], capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().split("\n"):
-                parts = line.split()
-                if parts and parts[0] == "default":
-                    for i, part in enumerate(parts):
-                        if part == "dev" and i + 1 < len(parts):
-                            return parts[i + 1]
-    except:
-        pass
-    return None
-
-
-def setup_router_mode():
-    """Enable IP forwarding and routing"""
-    logger.info("Enabling router mode...")
-
-    wan_interface = get_default_gateway_interface()
-    if wan_interface:
-        logger.info(f"Detected WAN interface: {wan_interface}")
-    else:
-        logger.warning("Could not detect WAN interface, using 'auto'")
-        wan_interface = "+"
-
-    with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
-        f.write("1")
-
-    try:
-        with open("/etc/sysctl.conf", "r") as f:
-            content = f.read()
-        if "net.ipv4.ip_forward=1" not in content:
-            with open("/etc/sysctl.conf", "a") as f:
-                f.write("\nnet.ipv4.ip_forward=1\n")
-    except:
-        pass
-
-    logger.info("Setting up FORWARD rules...")
-    subprocess.run(
-        [
-            "iptables",
-            "-A",
-            "FORWARD",
-            "-m",
-            "state",
-            "--state",
-            "RELATED,ESTABLISHED",
-            "-j",
-            "ACCEPT",
-        ],
-        capture_output=True,
-    )
-    subprocess.run(
-        ["iptables", "-A", "FORWARD", "-i", "lo", "-j", "ACCEPT"], capture_output=True
-    )
-    subprocess.run(["iptables", "-A", "FORWARD", "-j", "LOG"], capture_output=True)
-
-    logger.info("Setting up NAT (masquerade)...")
-    subprocess.run(
-        [
-            "iptables",
-            "-t",
-            "nat",
-            "-A",
-            "POSTROUTING",
-            "-o",
-            wan_interface,
-            "-j",
-            "MASQUERADE",
-        ],
-        capture_output=True,
-    )
-
-    logger.info("Router mode enabled successfully")
-
-
 def main():
     global DNS_SERVERS
 
@@ -1223,23 +1075,13 @@ def main():
     if args.force_dns:
         force_local_dns(DNS_SERVERS)
 
-    if args.router:
-        setup_router_mode()
-
     blacklist_manager = BlacklistManager()
     for bl_file in blacklist_files:
         blacklist_manager.load_from_file(bl_file)
 
     clear_dns_cache()
 
-    flush_iptables_rules(preserve_nat=args.router)
-
-    if args.router:
-        logger.info("Configuring router mode...")
-        capture_iface = args.capture_interface or "eth1"
-        logger.info(f"Capturing on interface: {capture_iface}")
-        setup_router_mode()
-        verify_and_setup_nat()
+    flush_iptables_rules()
 
     controller = DNSTrafficController(
         dns_servers=DNS_SERVERS, blacklist=blacklist_manager
@@ -1262,10 +1104,9 @@ def main():
 
     controller.running = True
 
-    capture_iface = args.capture_interface if args.router else None
     sniffer_thread = threading.Thread(
         target=packet_sniffer,
-        args=(controller, capture_iface, args.router),
+        args=(controller,),
         daemon=True,
     )
     sniffer_thread.start()
@@ -1276,9 +1117,6 @@ def main():
     print(f"\nDNS servers: {', '.join(DNS_SERVERS)}")
     print("Allowed private networks: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16")
     print(f"Verbose mode: {'ON' if args.verbose else 'OFF'}")
-    print(f"Router mode: {'ON' if args.router else 'OFF'}")
-    if args.router:
-        print(f"Capture interface: {capture_iface or 'auto'}")
     print("\nPress Ctrl+C to stop...")
     print("=" * 60 + "\n")
 

@@ -1,14 +1,16 @@
-# DNS Traffic Controller - Installation Guide for Ubuntu
+# DNS Traffic Controller - Installation Guide
 
 ## Requisitos previos
 
 ```bash
 sudo apt update
-sudo apt install python3-pip iptables
+sudo apt install python3-pip iptables ipset
 sudo pip3 install scapy
 ```
 
-## Instalación básica
+---
+
+## Instalación PC Individual
 
 1. Copiar el script:
 ```bash
@@ -16,98 +18,112 @@ sudo cp dns_traffic_controller.py /usr/local/bin/
 sudo chmod +x /usr/local/bin/dns_traffic_controller.py
 ```
 
-2. Probar ejecución manual:
+2. Probar ejecución:
 ```bash
-sudo /usr/local/bin/dns_traffic_controller.py -v -y
+sudo /usr/local/bin/dns_traffic_controller.py -v -y --blacklist blacklists/parental.txt
 ```
 
-## Instalación como servicio (recomendado)
+---
 
-1. Crear el archivo de servicio:
+## Instalación Router (con ipset)
+
+1. Copiar el script:
+```bash
+sudo cp dns_router_controller.py /usr/local/bin/
+sudo chmod +x /usr/local/bin/dns_router_controller.py
+```
+
+2. Probar ejecución (especificando interfaz LAN):
+```bash
+sudo /usr/local/bin/dns_router_controller.py -i eth1 -y
+```
+
+---
+
+## Instalación como servicio (PC Individual)
 
 ```bash
-sudo nano /etc/systemd/system/dns-traffic-controller.service
+sudo nano /etc/systemd/system/dns-controller.service
 ```
 
 Contenido:
 ```ini
 [Unit]
-Description=DNS Traffic Controller - Restrict outbound network
+Description=DNS Traffic Controller
 After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/usr/local/bin
-ExecStart=/usr/local/bin/dns_traffic_controller.py -v -y --dns 208.67.222.222 208.67.220.220
+ExecStart=/usr/local/bin/dns_traffic_controller.py -v -y --blacklist /usr/local/bin/blacklists/parental.txt --save-ips
 Restart=on-failure
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-2. Recargar systemd y habilitar el servicio:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable dns-traffic-controller
-sudo systemctl start dns-traffic-controller
+sudo systemctl enable dns-controller
+sudo systemctl start dns-controller
 ```
 
-3. Verificar estado:
+---
+
+## Opciones de línea de comandos
+
+### PC Individual
 ```bash
-sudo systemctl status dns-traffic-controller
+-v, --verbose         # Mostrar logs detallados
+-y, --yes           # Saltar confirmación
+--dns IP            # Servidores DNS (default: OpenDNS)
+-b, --blacklist     # Archivo de lista negra
+--force-dns         # Forzar DNS local
+--save-ips          # Guardar IPs al salir
+--load-ips           # Cargar IPs al iniciar
 ```
 
-4. Ver logs:
+### Router Controller
 ```bash
-sudo journalctl -u dns-traffic-controller -f
+-i, --interface     # Interfaz LAN a monitorizar (REQUERIDO)
+-v, --verbose        # Logs detallados
+-y, --yes           # Saltar confirmación
+--dns               # Servidores DNS
 ```
+
+---
 
 ## Comandos útiles
 
 ```bash
 # Ver estado del servicio
-sudo systemctl status dns-traffic-controller
+sudo systemctl status dns-controller
 
-# Ver logs en tiempo real
-sudo journalctl -u dns-traffic-controller -f
+# Ver logs
+sudo journalctl -u dns-controller -f
 
-# Detener el servicio
-sudo systemctl stop dns-traffic-controller
+# Detener servicio
+sudo systemctl stop dns-controller
 
-# Reiniciar el servicio
-sudo systemctl restart dns-traffic-controller
+# Reiniciar servicio
+sudo systemctl restart dns-controller
 
-# Deshabilitar al inicio
-sudo systemctl disable dns-traffic-controller
-```
+# Ver IPs разрешонные (router)
+ipset list dns_allowed
 
-## Liberar reglas iptables (en caso de emergencia)
-
-```bash
+# Liberar reglas iptables (emergencia)
 sudo iptables -P OUTPUT ACCEPT
 sudo iptables -F
+
+# Limpiar ipset (router)
+sudo ipset flush
 ```
 
-## Opciones de línea de comandos
-
-```bash
--v, --verbose    # Mostrar IPs permitidas/bloqueadas en consola
--y, --yes        # Saltar confirmación de usuario
---dns            # Especificar servidores DNS (default: OpenDNS)
-```
-
-Ejemplo con DNS personalizado:
-```bash
-sudo /usr/local/bin/dns_traffic_controller.py -v -y --dns 8.8.8.8 8.8.4.4
-```
+---
 
 ## Notas
 
-- El servicio requiere privilegios de root (usa User=root en el servicio)
-- Las reglas iptables persisten hasta que se reinicien o se ejecuten:
-  `sudo iptables -P OUTPUT ACCEPT`
-- Para mínimo impacto, el sniffer corre en un thread separado
+- Ambos scripts requieren privilegios de root
+- PC Individual: affecta solo el propio equipo (OUTPUT)
+- Router Controller: affecta clientes en LAN específica (FORWARD + ipset)
+- Las reglas iptables persisten hasta reiniciar
