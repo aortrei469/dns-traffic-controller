@@ -85,10 +85,12 @@ sudo systemctl start dns-controller
 
 ### Router Controller
 ```bash
--i, --interface     # Interfaz LAN a monitorizar (REQUERIDO)
+-i, --interface       # Interfaz LAN a monitorizar (REQUERIDO)
+-w, --wan-interface  # Interfaz WAN (opcional)
 -v, --verbose        # Logs detallados
 -y, --yes           # Saltar confirmación
 --dns               # Servidores DNS
+-b, --blacklist     # Archivo de lista negra
 ```
 
 ---
